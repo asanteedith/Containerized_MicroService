@@ -7,7 +7,7 @@ RUN pip install --user --no-cache-dir -r requirements.txt
 # Runtime
 FROM python:3.9-slim AS runtime
 WORKDIR /app
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 RUN useradd -m edith
 COPY --from=builder /root/.local /home/edith/.local
 COPY . .
