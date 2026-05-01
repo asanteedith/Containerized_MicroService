@@ -61,4 +61,4 @@ jobs:
 
       - name: Stop Services
         if: always()
-        run: docker compose down   
+        run: docker compose down
