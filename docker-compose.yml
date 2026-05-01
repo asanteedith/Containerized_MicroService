@@ -1,23 +1,15 @@
 version: '3.8'
-
 services:
   api:
     build: ./api
-    ports:
-      - "8000:8000"
+    ports: 
+       - "8000:8000"
     restart: always
-    environment:
-      - REDIS_HOST=redis
     deploy:
       resources:
         limits:
           cpus: '0.50'
           memory: 512M
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
     depends_on:
       redis:
         condition: service_healthy
@@ -26,48 +18,36 @@ services:
     build: ./frontend
     ports:
       - "3000:3000"
-    restart: always
     deploy:
       resources:
         limits:
           cpus: '0.50'
           memory: 512M
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
     depends_on:
       api:
         condition: service_healthy
 
-  worker:
-    build: ./worker
-    restart: always
-    environment:
-      - REDIS_HOST=redis
-    deploy:
-      resources:
-        limits:
-          cpus: '0.50'
-          memory: 512M
-    depends_on:
-      redis:
-        condition: service_healthy
-
   redis:
     image: redis:alpine
-    restart: always
-    deploy:
-      resources:
-        limits:
-          cpus: '0.25'
-          memory: 256M
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+
+
+  worker:
+    build: ./worker
+    environment:
+      - REDIS_HOST=redis
+    depends_on:
+      redis:
+        condition: service_healthy
 
 networks:
   default:

@@ -1,1 +1,7 @@
-".env" 
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+coverage.xml
+trivy-results.sarif
+node_modules/

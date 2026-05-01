@@ -1,17 +1,18 @@
-# Stage 1: Build
 FROM python:3.9-slim AS builder
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --user --no-cache-dir -r requirements.txt
 
-# Stage 2: Runtime
-FROM python:3.9-slim
+FROM python:3.9-slim AS runtime
 WORKDIR /app
-# Explicitly create the user as the bot expects
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 RUN useradd -m edith
 COPY --from=builder /root/.local /home/edith/.local
 COPY . .
-RUN chown -R edith:edith /app
+
+# Fix permissions as ROOT before switching
+RUN chown -R edith:edith /home/edith /app
 USER edith
 ENV PATH=/home/edith/.local/bin:$PATH
-CMD ["python", "worker.py"]
+
+CMD ["python", "-u", "worker.py"]

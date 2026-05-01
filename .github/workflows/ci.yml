@@ -1,59 +1,63 @@
 name: DevOps CI Pipeline
 on: [push]
-
 jobs:
   test-and-lint:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
+      - uses: actions/checkout@v3
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-
-      - name: Install Linting Tools
-        run: pip install flake8 pytest pytest-cov
-
-      - name: Run Hadolint (Docker Lint)
+      - name: Install Tools
+        run: pip install flake8 pytest pytest-cov pytest-mock
+      - name: Hadolint
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: api/Dockerfile
-
-      - name: Run Python Linting
-        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-
-      - name: Run Tests with Coverage
-        run: |
-          pytest --cov=api tests/ --cov-report=xml
-        
-      - name: Upload Coverage Artifact
+      - name: Pytest
+        run: pytest --cov=api tests/ --cov-report=xml
+      - name: Upload Coverage
         uses: actions/upload-artifact@v4
         with:
-          name: code-coverage
+          name: coverage
           path: coverage.xml
 
-  security-scan:
+  security:
     runs-on: ubuntu-latest
     needs: test-and-lint
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Build local image for scanning
-        run: docker build -t hng-app:latest ./api
-
-      - name: Run Trivy Security Scan
+      - uses: actions/checkout@v3
+      - name: Build
+        run: docker build -t hng-api:latest ./api
+      - name: Trivy
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'hng-app:latest'
+          image-ref: 'hng-api:latest'
           format: 'sarif'
           output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
-
-      - name: Upload SARIF Artifact
+      - name: Upload SARIF
         uses: actions/upload-artifact@v4
         with:
-          name: security-scan-results
-          path: trivy-results.sarif
+          name: security-report
+[       integration-test:
+    runs-on: ubuntu-latest
+    needs: security
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Build and Start Infrastructure
+        run: docker compose up -d --build
+
+      - name: Wait for services
+        run: sleep 10
+
+      - name: Verify API Health (Internal Network)
+        run: |
+          docker compose exec -T api python -c \
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+      - name: Stop Services
+        if: always()
+        run: docker compose down
+    

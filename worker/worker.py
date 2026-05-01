@@ -1,32 +1,40 @@
 import os
-import redis
 import time
+import redis
 
-# Connect to Redis with the same settings as the API
-r = redis.Redis(
-    host=os.getenv("REDIS_HOST", "redis"), 
-    port=6379, 
-    decode_responses=True
-)
+# Use environment variables so it works in Docker
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+QUEUE_NAME = "job_queue"
 
-def process_redis_jobs():
-    print("Worker is live and watching 'job_queue'...")
+def process_tasks():
+    # Connect to Redis with a retry mechanism
+    r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0)
+    
+    print(f"Worker connected to Redis at {REDIS_HOST}:{REDIS_PORT}")
+    
     while True:
-        # blpop waits for a job to appear in 'job_queue'
-        # The '0' means it waits forever until a job arrives
-        job = r.blpop("job_queue", timeout=0) 
-        
-        if job:
-            # job is a tuple: (list_name, data)
-            job_id = job[1]
-            print(f"Starting work on job: {job_id}")
+        try:
+            # BLPOP is a "Blocking Pop" - it waits until a task is available
+            task = r.blpop(QUEUE_NAME, timeout=5)
             
-            # Simulate processing time (2 seconds)
-            time.sleep(2) 
+            if task:
+                print(f"Processing task: {task[1].decode('utf-8')}")
+                job_id = task[1].decode('utf-8')
+                print(f"Processing task: {job_id}")
+                # Simulate work
+                time.sleep(2) 
+                print("Task complete.")
+                r.hset(f"job:{job_id}", "status", "completed")
             
-            # Update the status in the hash map so the dashboard sees it
-            r.hset(f"job:{job_id}", "status", "completed")
-            print(f"Finished job: {job_id}")
+            print("Task complete.")
+        except redis.ConnectionError:
+            print("Redis not available, retrying in 5 seconds...")
+            time.sleep(5)
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            with open('/tmp/worker_healthy', 'w') as f:
+                 f.write(str(time.time()))
 
 if __name__ == "__main__":
-    process_redis_jobs()
+    process_tasks()

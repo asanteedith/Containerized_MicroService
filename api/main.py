@@ -21,7 +21,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 2. Endpoint to create a new job
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
+
+# Endpoint to create a new job
 @app.post("/jobs")
 async def create_job():
     job_id = str(uuid.uuid4())
@@ -31,7 +35,7 @@ async def create_job():
     r.lpush("job_queue", job_id)
     return {"job_id": job_id}
 
-# 3. Endpoint to check job status
+# Endpoint to check job status
 @app.get("/jobs/{job_id}")
 async def get_status(job_id: str):
     status = r.hget(f"job:{job_id}", "status")
