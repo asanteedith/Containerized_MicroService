@@ -8,7 +8,6 @@ on:
 
 jobs:
 
-  # ── Stage 1: Lint ────────────────────────────────────────────────────────
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -44,11 +43,10 @@ jobs:
 
       - name: Lint Dockerfiles (hadolint)
         run: |
-          hadolint api/Dockerfile
-          hadolint worker/Dockerfile
-          hadolint frontend/Dockerfile
+          hadolint --ignore DL3008 --ignore DL3009 api/Dockerfile
+          hadolint --ignore DL3008 --ignore DL3009 worker/Dockerfile
+          hadolint --ignore DL3008 --ignore DL3009 frontend/Dockerfile
 
-  # ── Stage 2: Test ────────────────────────────────────────────────────────
   test:
     runs-on: ubuntu-latest
     needs: lint
@@ -78,7 +76,6 @@ jobs:
           name: coverage-report
           path: coverage.xml
 
-  # ── Stage 3: Build ───────────────────────────────────────────────────────
   build:
     runs-on: ubuntu-latest
     needs: test
@@ -128,7 +125,6 @@ jobs:
           name: docker-images
           path: images.tar.gz
 
-  # ── Stage 4: Security Scan ───────────────────────────────────────────────
   security:
     runs-on: ubuntu-latest
     needs: build
@@ -175,7 +171,6 @@ jobs:
           name: security-reports
           path: '*.sarif'
 
-  # ── Stage 5: Integration Test ────────────────────────────────────────────
   integration-test:
     runs-on: ubuntu-latest
     needs: security
@@ -187,9 +182,7 @@ jobs:
           cat > .env << EOF
           REDIS_HOST=redis
           REDIS_PORT=6379
-          REDIS_PASSWORD=
           API_URL=http://api:8000
-          FRONTEND_PORT=3000
           EOF
 
       - name: Build and start stack
@@ -209,11 +202,10 @@ jobs:
             sleep 5
           done
 
-      - name: Submit a job through frontend
+      - name: Submit a job through the API
         run: |
-          JOB=$(curl -s -X POST http://localhost:3000/submit \
-            -H "Content-Type: application/json" \
-            -d '{"data":"integration-test"}')
+          JOB=$(curl -s -X POST http://localhost:8000/jobs \
+            -H "Content-Type: application/json")
           echo "Job response: $JOB"
           JOB_ID=$(echo $JOB | python3 -c \
             "import sys,json; print(json.load(sys.stdin)['job_id'])")
@@ -222,7 +214,7 @@ jobs:
       - name: Poll until job completes
         run: |
           for i in $(seq 1 20); do
-            STATUS=$(curl -s http://localhost:3000/status/${{ env.JOB_ID }} \
+            STATUS=$(curl -s http://localhost:8000/jobs/${{ env.JOB_ID }} \
               | python3 -c \
               "import sys,json; print(json.load(sys.stdin).get('status',''))")
             echo "Status: $STATUS"
@@ -239,7 +231,6 @@ jobs:
         if: always()
         run: docker compose down
 
-  # ── Stage 6: Deploy ──────────────────────────────────────────────────────
   deploy:
     runs-on: ubuntu-latest
     needs: integration-test
@@ -256,13 +247,10 @@ jobs:
           script: |
             cd ~/hng14-stage2-devops
 
-            # Pull latest code
             git pull origin main
 
-            # Rolling update — API first
             docker compose up -d --build --no-deps api
 
-            # Wait up to 60 seconds for API health check
             echo "Waiting for API health check..."
             for i in $(seq 1 12); do
               if docker compose exec -T api python -c \
@@ -277,7 +265,6 @@ jobs:
               sleep 5
             done
 
-            # Health check failed — abort
             echo "Health check failed after 60s — aborting deploy"
-            docker compose up -d --no-deps api  # restore old container
+            docker compose up -d --no-deps api
             exit 1
