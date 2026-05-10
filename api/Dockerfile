@@ -1,11 +1,11 @@
 ﻿# Build
-FROM python:3.9-slim AS builder
+FROM python:3.11-slim AS builder
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --user --no-cache-dir -r requirements.txt
 
 # Runtime
-FROM python:3.9-slim AS runtime
+FROM python:3.11-slim AS runtime
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
@@ -15,7 +15,7 @@ COPY --from=builder /root/.local /home/edith/.local
 COPY . .
 RUN chown -R edith:edith /home/edith /app
 USER edith
-ENV PATH=/home/edith/.local/bin:
+ENV PATH=/home/edith/.local/bin:$PATH
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
