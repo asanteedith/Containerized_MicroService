@@ -7,58 +7,277 @@ on:
     branches: [ main ]
 
 jobs:
-  test-and-lint:
+
+  # ── Stage 1: Lint ────────────────────────────────────────────────────────
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
+
+      - name: Install Python linter
+        run: pip install flake8
+
+      - name: Lint Python (flake8)
+        run: flake8 api/ worker/ --max-line-length=120
+
+      - name: Install Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install ESLint
+        run: npm install -g eslint@8
+
+      - name: Lint JavaScript (eslint)
+        run: eslint frontend/app.js --env node --parser-options=ecmaVersion:2020
+
+      - name: Install Hadolint
+        run: |
+          wget -qO /usr/local/bin/hadolint \
+            https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64
+          chmod +x /usr/local/bin/hadolint
+
+      - name: Lint Dockerfiles (hadolint)
+        run: |
+          hadolint api/Dockerfile
+          hadolint worker/Dockerfile
+          hadolint frontend/Dockerfile
+
+  # ── Stage 2: Test ────────────────────────────────────────────────────────
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
       - name: Install dependencies
         run: |
           pip install -r api/requirements.txt
-          pip install -r worker/requirements.txt
-          pip install pytest
-      - name: Run Tests
-        run: pytest
+          pip install pytest pytest-cov
 
-  security:
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ \
+            --cov=api \
+            --cov-report=xml:coverage.xml \
+            --cov-report=term-missing
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  # ── Stage 3: Build ───────────────────────────────────────────────────────
+  build:
     runs-on: ubuntu-latest
-    needs: test-and-lint
+    needs: test
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+
     steps:
       - uses: actions/checkout@v3
-      - name: Build API Image
-        run: docker build -t hng-api:latest ./api
-      - name: Trivy Scan
+
+      - name: Set short SHA
+        run: echo "SHA=$(echo $GITHUB_SHA | cut -c1-7)" >> $GITHUB_ENV
+
+      - name: Build API image
+        run: |
+          docker build -t localhost:5000/hng-api:${{ env.SHA }} \
+                       -t localhost:5000/hng-api:latest ./api
+          docker push localhost:5000/hng-api:${{ env.SHA }}
+          docker push localhost:5000/hng-api:latest
+
+      - name: Build Worker image
+        run: |
+          docker build -t localhost:5000/hng-worker:${{ env.SHA }} \
+                       -t localhost:5000/hng-worker:latest ./worker
+          docker push localhost:5000/hng-worker:${{ env.SHA }}
+          docker push localhost:5000/hng-worker:latest
+
+      - name: Build Frontend image
+        run: |
+          docker build -t localhost:5000/hng-frontend:${{ env.SHA }} \
+                       -t localhost:5000/hng-frontend:latest ./frontend
+          docker push localhost:5000/hng-frontend:${{ env.SHA }}
+          docker push localhost:5000/hng-frontend:latest
+
+      - name: Save images as artifacts
+        run: |
+          docker save localhost:5000/hng-api:latest \
+                      localhost:5000/hng-worker:latest \
+                      localhost:5000/hng-frontend:latest \
+            | gzip > images.tar.gz
+
+      - name: Upload images artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-images
+          path: images.tar.gz
+
+  # ── Stage 4: Security Scan ───────────────────────────────────────────────
+  security:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Build images for scanning
+        run: |
+          docker build -t hng-api:latest ./api
+          docker build -t hng-worker:latest ./worker
+          docker build -t hng-frontend:latest ./frontend
+
+      - name: Scan API image
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: 'hng-api:latest'
           format: 'sarif'
-          output: 'trivy-results.sarif'
-      - name: Upload Security Report
+          output: 'trivy-api.sarif'
+          severity: 'CRITICAL'
+          exit-code: '1'
+
+      - name: Scan Worker image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'hng-worker:latest'
+          format: 'sarif'
+          output: 'trivy-worker.sarif'
+          severity: 'CRITICAL'
+          exit-code: '1'
+
+      - name: Scan Frontend image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'hng-frontend:latest'
+          format: 'sarif'
+          output: 'trivy-frontend.sarif'
+          severity: 'CRITICAL'
+          exit-code: '1'
+
+      - name: Upload security reports
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: security-report
-          path: trivy-results.sarif
+          name: security-reports
+          path: '*.sarif'
 
+  # ── Stage 5: Integration Test ────────────────────────────────────────────
   integration-test:
     runs-on: ubuntu-latest
     needs: security
     steps:
       - uses: actions/checkout@v3
 
-      - name: Build and Start Infrastructure
+      - name: Create .env file
+        run: |
+          cat > .env << EOF
+          REDIS_HOST=redis
+          REDIS_PORT=6379
+          REDIS_PASSWORD=
+          API_URL=http://api:8000
+          FRONTEND_PORT=3000
+          EOF
+
+      - name: Build and start stack
         run: docker compose up -d --build
 
-      - name: Wait for services
-        run: sleep 10
-
-      - name: Verify API Health (Internal Network)
+      - name: Wait for services to be healthy
         run: |
-          docker compose exec -T api python -c \
-          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+          echo "Waiting for services..."
+          for i in $(seq 1 30); do
+            if docker compose exec -T api python -c \
+              "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" \
+              2>/dev/null; then
+              echo "API is healthy"
+              break
+            fi
+            echo "Attempt $i — waiting..."
+            sleep 5
+          done
 
-      - name: Stop Services
+      - name: Submit a job through frontend
+        run: |
+          JOB=$(curl -s -X POST http://localhost:3000/submit \
+            -H "Content-Type: application/json" \
+            -d '{"data":"integration-test"}')
+          echo "Job response: $JOB"
+          JOB_ID=$(echo $JOB | python3 -c \
+            "import sys,json; print(json.load(sys.stdin)['job_id'])")
+          echo "JOB_ID=$JOB_ID" >> $GITHUB_ENV
+
+      - name: Poll until job completes
+        run: |
+          for i in $(seq 1 20); do
+            STATUS=$(curl -s http://localhost:3000/status/${{ env.JOB_ID }} \
+              | python3 -c \
+              "import sys,json; print(json.load(sys.stdin).get('status',''))")
+            echo "Status: $STATUS"
+            if [ "$STATUS" = "completed" ]; then
+              echo "Job completed successfully"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Job did not complete in time"
+          exit 1
+
+      - name: Tear down stack
         if: always()
         run: docker compose down
+
+  # ── Stage 6: Deploy ──────────────────────────────────────────────────────
+  deploy:
+    runs-on: ubuntu-latest
+    needs: integration-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            cd ~/hng14-stage2-devops
+
+            # Pull latest code
+            git pull origin main
+
+            # Rolling update — API first
+            docker compose up -d --build --no-deps api
+
+            # Wait up to 60 seconds for API health check
+            echo "Waiting for API health check..."
+            for i in $(seq 1 12); do
+              if docker compose exec -T api python -c \
+                "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" \
+                2>/dev/null; then
+                echo "API healthy — deploying remaining services"
+                docker compose up -d --build --no-deps worker frontend
+                echo "Deployment complete"
+                exit 0
+              fi
+              echo "Attempt $i — waiting 5s..."
+              sleep 5
+            done
+
+            # Health check failed — abort
+            echo "Health check failed after 60s — aborting deploy"
+            docker compose up -d --no-deps api  # restore old container
+            exit 1

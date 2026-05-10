@@ -1,12 +1,12 @@
 FROM node:18-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+RUN npm install --omit=dev
 COPY . .
 
 FROM node:18-alpine
 WORKDIR /app
-RUN addgroup -S edith&& adduser -S edith -G edith
+RUN addgroup -S edith && adduser -S edith -G edith
 COPY --from=builder /app ./
 RUN chown -R edith:edith /app
 USER edith

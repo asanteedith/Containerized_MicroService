@@ -1,34 +1,10 @@
 version: '3.8'
+
 services:
-  api:
-    build: ./api
-    ports: 
-       - "8000:8000"
-    restart: always
-    deploy:
-      resources:
-        limits:
-          cpus: '0.50'
-          memory: 512M
-    depends_on:
-      redis:
-        condition: service_healthy
-
-  frontend:
-    build: ./frontend
-    ports:
-      - "3000:3000"
-    deploy:
-      resources:
-        limits:
-          cpus: '0.50'
-          memory: 512M
-    depends_on:
-      api:
-        condition: service_healthy
-
   redis:
     image: redis:alpine
+    expose:
+      - "6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -39,16 +15,62 @@ services:
         limits:
           cpus: '0.25'
           memory: 256M
+    networks:
+      - hng_network
 
+  api:
+    build: ./api
+    ports:
+      - "8000:8000"
+    restart: always
+    environment:
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - hng_network
 
   worker:
     build: ./worker
     environment:
-      - REDIS_HOST=redis
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
     depends_on:
       redis:
         condition: service_healthy
+    networks:
+      - hng_network
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - API_URL=${API_URL:-http://api:8000}
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - hng_network
 
 networks:
-  default:
+  hng_network:
     name: hng_network
+    driver: bridge
