@@ -25,6 +25,7 @@ app.add_middleware(
 def health_check():
     return {"status": "healthy"}
 
+
 # Endpoint to create a new job
 @app.post("/jobs")
 async def create_job():
@@ -34,6 +35,7 @@ async def create_job():
     # Push the job ID to the queue for the worker to find
     r.lpush("job_queue", job_id)
     return {"job_id": job_id}
+
 
 # Endpoint to check job status
 @app.get("/jobs/{job_id}")
