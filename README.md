@@ -1,56 +1,172 @@
-# Multi-Tier Microservices Infrastructure
-This repository demonstrates a hardened, containerized DevOps architecture featuring a Python FastAPI backend, a Node.js/Express frontend, and a Redis-backed background worker. The project emphasizes automated CI/CD, container security, and resource orchestration.
+# Containerized MicroService
 
-# Architecture Overview
+A production-ready, containerized job processing system built with a Python FastAPI backend, Node.js frontend, Python background worker, and Redis message broker. The project demonstrates real-world DevOps practices including multi-stage Docker builds, automated CI/CD, container security hardening, and rolling deployments.
 
-The system is orchestrated via Docker Compose into four primary services:
-* API (Backend): A FastAPI service providing core logic and health monitoring.
-* Frontend: A Node.js/Express application serving the user interface.
-* Worker: A Python background processor handling asynchronous tasks.
-* Redis: A high-performance message broker facilitating service communication.
+---
 
-# Core Application Logic
-The application functions as a Distributed Job Processing System, designed to handle intensive tasks without compromising user experience:
-* Task Ingestion: The Frontend provides a dashboard for users to submit data-intensive jobs to the API gateway.
-* Asynchronous Queuing: The API offloads these jobs to Redis, ensuring the web interface remains responsive and "non-blocking."
-* Distributed Execution: The Worker monitors the queue and processes jobs in the background, allowing the system to scale horizontally by adding more worker nodes as demand increases.
+## Architecture
 
-# Infrastructure & DevOps Features
+```
++----------------------------------------------------------+
+|                    Docker Network (hng_network)          |
+|                                                          |
+|  User --HTTP:3000--> [ Frontend (Node.js) ]              |
+|                              |                           |
+|                        POST /jobs                        |
+|                              |                           |
+|                       [ API (FastAPI) ]                  |
+|                              |                           |
+|                        lpush job_queue                   |
+|                              |                           |
+|                         [ Redis ]                        |
+|                              |                           |
+|                        blpop job_queue                   |
+|                              |                           |
+|                       [ Worker (Python) ]                |
+|                                                          |
++----------------------------------------------------------+
+```
 
-* Multi-Stage Docker Builds: Optimized images to minimize attack surface and deployment footprint.
-* Resource Constraints: Strict CPU (0.50) and Memory (512MB) limits applied to ensure system stability.
-* Non-Privileged Execution: All services execute under a dedicated hng system user (UID 1000) for enhanced security.
-* Automated CI/CD: A 3-stage GitHub Actions pipeline validating code quality, security, and integration.
-* Container Health Probing: Integrated liveness checks ensure services are responsive before traffic routing.
+The system works as a distributed job processing pipeline:
 
-# Deployment Guide
+1. A user submits a job through the frontend dashboard
+2. The API creates a job entry in Redis and pushes the job ID to the queue
+3. The worker picks up the job, processes it, and updates the status to completed
+4. The frontend polls the API for the job status and displays the result
 
-# Prerequisites
-* Docker and Docker Compose
-* Git
+---
 
-# Local Installation
-1.  Clone the repository:
-       git clone <https://github.com/asanteedith/hng14-stage2-devops>
-    cd hng14-stage2-devops
-    
-2.  Environment Setup:
-    Create a .env file based on the template:
-       cp .env.example .env
-    
-3.  Launch the Stack:
-       docker-compose up -d --build
-    
-4.  Verify Access:
-    * Frontend: http://localhost:3000
-    * API Health: http://localhost:8000/health
+## Prerequisites
 
-# CI/CD Pipeline Logic
+- Docker Engine 24+
+- Docker Compose plugin
+- Git
 
-The automated workflow (`ci.yml`) validates every push across three critical gates:
-1.  Test & Lint: Executes Python unit tests (Pytest) and lints Dockerfiles (Hadolint).
-2.  Security Scan: Performs container vulnerability assessments using Trivy.
-3.  Integration Test: Verifies internal service connectivity using urllib probes within the Docker network.
+---
 
-# Documentation
-A detailed log of technical debt cleared and specific infrastructure bugs resolved can be found in [FIXES.md](./FIXES.md).
+## Quick Start
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/asanteedith/Containerized_MicroService.git
+cd Containerized_MicroService
+
+# 2. Set up environment
+cp .env.example .env
+
+# 3. Start the stack
+docker compose up -d --build
+
+# 4. Verify everything is running
+docker compose ps
+```
+
+Access the services:
+- Frontend: http://localhost:3000
+- API Health: http://localhost:8000/health
+- Submit a job: `curl -X POST http://localhost:8000/jobs`
+- Check job status: `curl http://localhost:8000/jobs/<job_id>`
+
+---
+
+## Services
+
+| Service | Image | Port | Description |
+|---|---|---|---|
+| frontend | node:18-alpine | 3000 | User dashboard for submitting and tracking jobs |
+| api | python:3.11-slim | 8000 | FastAPI backend — creates jobs and serves status |
+| worker | python:3.11-slim | internal | Background processor — picks up and completes jobs |
+| redis | redis:alpine | internal | Message broker and job state store |
+
+---
+
+## CI/CD Pipeline
+
+The GitHub Actions pipeline runs on every push to main in strict order:
+
+```
+lint → test → build → security → integration-test → deploy
+```
+
+| Stage | Tool | What it does |
+|---|---|---|
+| lint | flake8, eslint, hadolint | Checks Python, JavaScript, and Dockerfile style |
+| test | pytest + pytest-cov | Runs unit tests and uploads coverage report |
+| build | Docker + local registry | Builds all 3 images tagged with git SHA and latest |
+| security | Trivy | Scans all images for CRITICAL vulnerabilities |
+| integration-test | docker compose | Starts full stack, submits a job, polls until completed |
+| deploy | appleboy/ssh-action | Rolling update with health check gate before cutover |
+
+A failure in any stage stops all subsequent stages from running.
+
+---
+
+## Security Hardening
+
+- All services run as a dedicated non-root user (edith) following the Principle of Least Privilege
+- Multi-stage Docker builds ensure build tools never reach production images
+- No secrets committed — all configuration via environment variables
+- Redis not exposed on the host machine — internal network only
+- Resource limits enforced on every service
+
+| Service | CPU Limit | Memory Limit |
+|---|---|---|
+| api | 0.50 | 512MB |
+| frontend | 0.50 | 512MB |
+| worker | 0.50 | 512MB |
+| redis | 0.25 | 256MB |
+
+---
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and fill in the values:
+
+```bash
+cp .env.example .env
+```
+
+| Variable | Default | Description |
+|---|---|---|
+| REDIS_HOST | redis | Redis hostname — Docker service name |
+| REDIS_PORT | 6379 | Redis port |
+| API_URL | http://api:8000 | Internal API URL used by the frontend |
+
+---
+
+## Project Structure
+
+```
+Containerized_MicroService/
+├── api/                  # FastAPI backend
+│   ├── Dockerfile
+│   ├── main.py
+│   └── requirements.txt
+├── frontend/             # Node.js frontend
+│   ├── Dockerfile
+│   └── app.js
+├── worker/               # Python background worker
+│   ├── Dockerfile
+│   └── worker.py
+├── tests/                # Pytest unit tests
+├── .github/
+│   └── workflows/
+│       └── ci.yml        # Full 6-stage CI/CD pipeline
+├── docker-compose.yml
+├── .env.example
+├── FIXES.md
+└── README.md
+```
+
+---
+
+## Known Limitations
+
+- Single VM deployment — not designed for multi-host or Kubernetes
+- No authentication on API endpoints
+- No log rotation on worker output
+- Trivy findings are reported but not blocking — upgrade base images to resolve
+
+---
+
+See [FIXES.md](./FIXES.md) for a full log of every bug found and fixed in this project.
